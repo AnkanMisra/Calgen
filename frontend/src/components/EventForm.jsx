@@ -7,7 +7,7 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
   const [formData, setFormData] = useState({
     startDate: "",
     endDate: "",
-    count: 5,
+    count: 10,
     userInput: "",
     timezone: "America/New_York",
     earliestStartTime: 8, // Default 8 AM start time
@@ -53,7 +53,11 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
     setFormData((prev) => ({
       ...prev,
       [name]:
-        type === "number" ? (value === "" ? "" : parseInt(value) || 1) : value,
+        type === "number"
+          ? value === ""
+            ? ""
+            : parseInt(value, 10) || 1
+          : value,
     }));
     setError("");
   };
@@ -86,8 +90,8 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
       return;
     }
 
-    if (formData.count < 1 || formData.count > 30) {
-      setError("Event count must be between 1 and 30");
+    if (formData.count < 1 || formData.count > 10) {
+      setError("Event count must be between 1 and 10");
       setLoading(false);
       return;
     }
@@ -117,9 +121,10 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
         setFormData({
           startDate: "",
           endDate: "",
-          count: 5,
+          count: 10,
           userInput: "",
           timezone: "America/New_York",
+          earliestStartTime: 8,
         });
       } else {
         setError(data.error || "Failed to create events");
@@ -141,7 +146,7 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
       </h2>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Date Range */}
           <div>
             <label
@@ -178,12 +183,53 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
               required
             />
           </div>
+
+          {/* Start Time */}
+          <div>
+            <label
+              htmlFor="earliestStartTime"
+              className="block text-sm font-medium text-gray-700 mb-2"
+            >
+              Preferred Start Time
+            </label>
+            <select
+              id="earliestStartTime"
+              name="earliestStartTime"
+              value={formData.earliestStartTime}
+              onChange={handleInputChange}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value={6}>6:00 AM</option>
+              <option value={7}>7:00 AM</option>
+              <option value={8}>8:00 AM</option>
+              <option value={9}>9:00 AM</option>
+              <option value={10}>10:00 AM</option>
+              <option value={11}>11:00 AM</option>
+              <option value={12}>12:00 PM</option>
+              <option value={13}>1:00 PM</option>
+              <option value={14}>2:00 PM</option>
+              <option value={15}>3:00 PM</option>
+              <option value={16}>4:00 PM</option>
+              <option value={17}>5:00 PM</option>
+              <option value={18}>6:00 PM</option>
+              <option value={19}>7:00 PM</option>
+              <option value={20}>8:00 PM</option>
+            </select>
+          </div>
         </div>
         {/* Date Helper */}
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <p className="text-sm text-blue-700">
             <span className="font-medium">📅 Note:</span> Events can only be
             created for today and future dates. Past dates are not allowed.
+          </p>
+        </div>
+        {/* Start Time Helper */}
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <p className="text-sm text-amber-700">
+            <span className="font-medium">⏰ Start Time:</span> Events will be
+            scheduled from your selected start time until 1:00 AM. Events will
+            be distributed across all selected days within this timeframe.
           </p>
         </div>
         {/* Event Count */}
@@ -208,10 +254,10 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
                 e.stopPropagation();
               }
             }}
-            placeholder="Enter number of events (1-30)"
+            placeholder="Enter number of events (1-10)"
           />
           <p className="text-xs text-gray-500 mt-1">
-            Maximum 30 events per request
+            Maximum 10 events per request
           </p>
         </div>
         "" ""

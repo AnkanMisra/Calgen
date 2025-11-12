@@ -29,6 +29,12 @@ export const findAvailableTimeSlot = (
     scheduling = { searchIncrement: 15, maxAttempts: 200 },
   } = constraints;
 
+  // Validate input dates
+  if (!requestedStart || isNaN(requestedStart.getTime())) {
+    console.error("Invalid requestedStart:", requestedStart);
+    return null;
+  }
+
   const requestedEnd = new Date(requestedStart);
   requestedEnd.setMinutes(requestedEnd.getMinutes() + requestedDuration);
 
@@ -37,8 +43,11 @@ export const findAvailableTimeSlot = (
   workingHoursStart.setHours(workingHours.start, 0, 0, 0);
 
   const workingHoursEnd = new Date(requestedStart);
-  workingHoursEnd.setDate(workingHoursEnd.getDate() + 1); // Next day
-  workingHoursEnd.setHours(workingHours.end, 0, 0, 0); // 1 AM next day
+  // If end hour is less than start hour, it means it goes to next day
+  if (workingHours.end <= workingHours.start) {
+    workingHoursEnd.setDate(workingHoursEnd.getDate() + 1); // Next day
+  }
+  workingHoursEnd.setHours(workingHours.end, 0, 0, 0);
 
   // Sort existing events by start time for better scheduling
   const sortedEvents = [...scheduledEvents].sort((a, b) => a.start - b.start);
