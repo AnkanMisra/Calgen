@@ -1,9 +1,14 @@
+<div align="center">
+
 # CalGen
 
-<img width="1024" height="1024" alt="calgen" src="https://github.com/user-attachments/assets/efae8f97-c194-4b04-b596-c49a2a595cab" />
+<img width="1024" height="1024" alt="calgen" src="https://github.com/user-attachments/assets/efae8f97-c194-4b04-b596-c49a2a595cab" /></div>
+
 
 
 A production-ready web application that generates and schedules realistic calendar events using AI-powered content creation. Features intelligent scheduling algorithms, comprehensive error handling, and seamless Google Calendar integration.
+
+
 
 ## Overview
 
