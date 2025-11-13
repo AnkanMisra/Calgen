@@ -23,8 +23,8 @@ async function testAIGeneration() {
         headers: {
           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://fake-calendar-filler.com",
-          "X-Title": "Fake Calendar Filler",
+          "HTTP-Referer": "https://calgen.com",
+          "X-Title": "CalGen",
         },
         body: JSON.stringify({
           model: process.env.OPENROUTER_MODEL,

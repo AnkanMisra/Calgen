@@ -1,22 +1,22 @@
 {
-  "name": "funny-calendar-filler",
+  "name": "calgen",
   "version": "2.0.0",
-  "description": "A Node.js web app that creates fake calendar events using Google Calendar API",
-  "main": "server.js",
+  "description": "CalGen - AI-powered calendar automation tool that creates realistic events using Google Calendar API",
+  "main": "backend/server.js",
   "type": "module",
   "scripts": {
-    "start": "NODE_ENV=production node server.js",
-    "dev": "node --watch server.js",
+    "start": "NODE_ENV=production node backend/server.js",
+    "dev": "node --watch backend/server.js",
     "dev:full": "concurrently \"pnpm run dev\" \"cd frontend && pnpm run dev\"",
     "frontend": "cd frontend && pnpm run dev",
     "build": "cd frontend && pnpm run build",
     "build:prod": "pnpm run build && echo 'Production build ready in frontend/dist'",
     "preview": "cd frontend && pnpm run preview",
-    "clean": "rm -f token.json server-backup.js && rm -rf frontend/dist frontend/node_modules",
-    "backup": "cp server.js server-backup-$(date +%Y%m%d-%H%M%S).js",
+    "clean": "rm -f config/token.json backend/server-backup.js && rm -rf frontend/dist frontend/node_modules",
+    "backup": "cp backend/server.js backend/server-backup-$(date +%Y%m%d-%H%M%S).js",
     "status": "curl -s http://localhost:3000/api/auth/status | jq .",
     "install:all": "pnpm install && cd frontend && pnpm install",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node scripts/test-runner.js"
   },
   "keywords": [
     "google-calendar",

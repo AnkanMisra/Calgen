@@ -12,9 +12,11 @@ pnpm-debug.log*
 .env.test.local
 .env.production.local
 
-# Google Calendar API tokens
+# Google Calendar API tokens and config
 token.json
 credentials.json
+config/
+.env.example
 
 # Build outputs
 dist/
@@ -113,10 +115,14 @@ firebase-debug.log
 
 # Testing
 coverage/
+test-results/*.txt
+test-results-detailed.json
 
 # Misc
 *.orig
 .merge_file_*
+*.backup
 
 # Local development
 .local
+

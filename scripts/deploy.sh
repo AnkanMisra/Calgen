@@ -8,8 +8,8 @@ set -e  # Exit on any error
 echo "🚀 Starting deployment for Fake Calendar Filler..."
 
 # Check if required files exist
-if [ ! -f "credentials.json" ]; then
-    echo "❌ Error: credentials.json not found. Please add your Google OAuth credentials."
+if [ ! -f "config/credentials.json" ]; then
+    echo "❌ Error: config/credentials.json not found. Please add your Google OAuth credentials."
     exit 1
 fi
 

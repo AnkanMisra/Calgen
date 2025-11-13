@@ -19,7 +19,7 @@ function App() {
 
   // Initialize status log
   useEffect(() => {
-    handleStatusUpdate("Fake Calendar Filler loaded", "info");
+    handleStatusUpdate("CalGen loaded", "info");
   }, []);
 
   return (
@@ -43,7 +43,7 @@ function App() {
                 />
               </svg>
               <h1 className="text-xl font-bold text-gray-900">
-                Fake Calendar Filler
+                CalGen
               </h1>
             </div>
             <div className="flex items-center space-x-4">

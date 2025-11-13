@@ -15,14 +15,14 @@ const TEST_EVENT_REQUEST = {
 };
 
 async function runTest() {
-  console.log('🧪 Starting Event Creation Test...');
+  console.log('[TEST] Starting Event Creation Test...');
   console.log('Expected: 10 events should be created');
   console.log('Previous result: 6/10 events (4 events were skipped)');
   console.log('');
 
   try {
     // Test the event creation endpoint
-    console.log('📡 Sending request to create 10 events...');
+    console.log('[INFO] Sending request to create 10 events...');
     console.log('Request:', JSON.stringify(TEST_EVENT_REQUEST, null, 2));
     console.log('');
 
@@ -36,7 +36,7 @@ async function runTest() {
 
     const data = await response.json();
 
-    console.log('📊 Results:');
+    console.log('[INFO] Results:');
     console.log('Response Status:', response.status);
     console.log('Response Body:', JSON.stringify(data, null, 2));
     console.log('');
@@ -46,26 +46,26 @@ async function runTest() {
       const createdCount = data.events.length;
       const requestedCount = TEST_EVENT_REQUEST.count;
 
-      console.log('✅ Analysis:');
+      console.log('[PASS] Analysis:');
       console.log(`   • Requested: ${requestedCount} events`);
       console.log(`   • Created: ${createdCount} events`);
       console.log(`   • Success Rate: ${((createdCount / requestedCount) * 100).toFixed(1)}%`);
 
       if (createdCount === requestedCount) {
-        console.log('🎉 SUCCESS: All 10 events were created!');
-        console.log('✅ The const reassignment bug has been fixed!');
+        console.log('[PASS] SUCCESS: All 10 events were created!');
+        console.log('[PASS] The const reassignment bug has been fixed!');
       } else {
-        console.log(`⚠️  ISSUE: Only ${createdCount}/${requestedCount} events created`);
-        console.log(`❌ ${requestedCount - createdCount} events are still being skipped`);
+        console.log(`[WARN] ISSUE: Only ${createdCount}/${requestedCount} events created`);
+        console.log(`[FAIL] ${requestedCount - createdCount} events are still being skipped`);
       }
     } else {
-      console.log('❌ API Error:');
+      console.log('[FAIL] API Error:');
       console.log('   Success:', data.success);
       console.log('   Error:', data.error || data.message);
     }
 
   } catch (error) {
-    console.error('❌ Test Failed with error:', error.message);
+    console.error('[FAIL] Test Failed with error:', error.message);
     console.error('   Make sure the server is running on http://localhost:3000');
   }
 }

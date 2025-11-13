@@ -90,8 +90,8 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
       return;
     }
 
-    if (formData.count < 1 || formData.count > 10) {
-      setError("Event count must be between 1 and 10");
+    if (formData.count < 1 || formData.count > 30) {
+      setError("Event count must be between 1 and 30");
       setLoading(false);
       return;
     }
@@ -254,10 +254,10 @@ const EventForm = ({ onEventsCreated, onStatusUpdate }) => {
                 e.stopPropagation();
               }
             }}
-            placeholder="Enter number of events (1-10)"
+            placeholder="Enter number of events (1-30)"
           />
           <p className="text-xs text-gray-500 mt-1">
-            Maximum 10 events per request
+            Maximum 30 events per request
           </p>
         </div>
         "" ""

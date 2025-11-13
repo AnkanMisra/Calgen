@@ -10,53 +10,31 @@ import dotenv from "dotenv";
 // Load environment variables
 dotenv.config();
 
-// Multiple API Keys for rotation and rate limit handling
-const API_KEYS = [
-  process.env.OPENROUTER_API_KEY,
-  process.env.OPENROUTER_API_KEY_2,
-  process.env.OPENROUTER_API_KEY_3,
-  process.env.OPENROUTER_API_KEY_4,
-].filter((key) => key && key.trim() !== ""); // Filter out null/empty keys
-
-let currentKeyIndex = 0;
-
-// Function to get next API key
-const getNextApiKey = () => {
-  const key = API_KEYS[currentKeyIndex];
-  currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
-  console.log(
-    `Using API key index: ${currentKeyIndex} (Total keys: ${API_KEYS.length})`,
-  );
-  return key;
-};
-
-// Function to get API key with retry
-const getApiKeyWithRetry = (failedKeyIndex = null) => {
-  if (failedKeyIndex !== null) {
-    // Skip the failed key
-    currentKeyIndex = (failedKeyIndex + 1) % API_KEYS.length;
-  }
-  return API_KEYS[currentKeyIndex];
-};
+// Single API Key with intelligent rate limiting
+const API_KEY = process.env.OPENROUTER_API_KEY;
+const MAX_REQUESTS_PER_MINUTE = 60; // Conservative rate limit
+const REQUEST_CACHE = new Map(); // Cache for similar requests
+let requestCount = 0;
+let lastMinuteReset = Date.now();
 
 // Validate required environment variables
 const validateEnvironment = () => {
-  if (API_KEYS.length === 0) {
+  if (!API_KEY) {
     console.error(
-      "❌ No OpenRouter API keys configured! Please add OPENROUTER_API_KEY to your .env file",
+      "OpenRouter API key not configured! Please add OPENROUTER_API_KEY to your .env file",
     );
     process.exit(1);
   }
 
   if (!process.env.OPENROUTER_MODEL) {
     console.error(
-      "❌ OPENROUTER_MODEL not configured! Please add it to your .env file",
+      "OPENROUTER_MODEL not configured! Please add it to your .env file",
     );
     process.exit(1);
   }
 
   console.log(
-    `Environment validated: ${API_KEYS.length} API keys, model: ${process.env.OPENROUTER_MODEL}`,
+    `Environment validated: Single API key, model: ${process.env.OPENROUTER_MODEL}`,
   );
 };
 
@@ -72,6 +50,11 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.join(__dirname, "..");
+
+// Path constants for config files
+const TOKEN_PATH = path.join(projectRoot, "config", "token.json");
+const CREDENTIALS_PATH = path.join(projectRoot, "config", "credentials.json");
 
 const app = express();
 
@@ -90,15 +73,17 @@ app.use(bodyParser.json());
 
 // Serve static files -优先使用React构建文件，开发时fallback到public
 const isProduction = process.env.NODE_ENV === "production";
-app.use(express.static(isProduction ? "frontend/dist" : "public"));
+const staticPath = isProduction
+  ? path.join(projectRoot, "frontend", "dist")
+  : path.join(projectRoot, "public");
+app.use(express.static(staticPath));
 
 // Load credentials - configurable via environment variable
-const credentialsPath =
-  process.env.GOOGLE_CREDENTIALS_PATH || "credentials.json";
+const credentialsPath = process.env.GOOGLE_CREDENTIALS_PATH || CREDENTIALS_PATH;
 if (!fs.existsSync(credentialsPath)) {
-  console.error(`❌ Google credentials file not found at: ${credentialsPath}`);
+  console.error(`Google credentials file not found at: ${credentialsPath}`);
   console.error(
-    "Please download your Google OAuth credentials and place them in credentials.json",
+    "Please download your Google OAuth credentials and place them in config/credentials.json",
   );
   process.exit(1);
 }
@@ -114,7 +99,50 @@ const oAuth2Client = new google.auth.OAuth2(
 // Google People API for user info
 const people = google.people({ version: "v1", auth: oAuth2Client });
 
-// Generate dynamic event titles based on user input using AI with retry logic
+// Rate limiting and caching utilities
+const checkRateLimit = () => {
+  const now = Date.now();
+  if (now - lastMinuteReset >= 60000) {
+    requestCount = 0;
+    lastMinuteReset = now;
+  }
+
+  if (requestCount >= MAX_REQUESTS_PER_MINUTE) {
+    const waitTime = 60000 - (now - lastMinuteReset);
+    console.log(`Rate limit reached. Waiting ${waitTime}ms...`);
+    return waitTime;
+  }
+
+  requestCount++;
+  return 0;
+};
+
+const getCacheKey = (userInput, eventCount) => {
+  return `${userInput.toLowerCase().trim()}_${eventCount}`;
+};
+
+const getCachedEvents = (cacheKey) => {
+  const cached = REQUEST_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < 300000) {
+    // 5 minutes cache
+    console.log(`[CACHE] Using cached events for: ${cacheKey}`);
+    return cached.events;
+  }
+  return null;
+};
+
+const cacheEvents = (cacheKey, events) => {
+  REQUEST_CACHE.set(cacheKey, {
+    events,
+    timestamp: Date.now(),
+  });
+  console.log(`[CACHE] Cached events for: ${cacheKey}`);
+};
+
+// Exponential backoff retry utility
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Optimized AI event generation with single API key
 async function generateDynamicEventTitles(
   userInput,
   eventCount,
@@ -124,18 +152,31 @@ async function generateDynamicEventTitles(
   console.log(`   • Input: "${userInput}"`);
   console.log(`   • Events requested: ${eventCount}`);
   console.log(`   • Model: ${process.env.OPENROUTER_MODEL}`);
-  console.log(`   • API Key Index: ${currentKeyIndex + 1}/${API_KEYS.length}`);
+  console.log(`   • Rate limit: ${requestCount}/${MAX_REQUESTS_PER_MINUTE}`);
+
+  // Check cache first
+  const cacheKey = getCacheKey(userInput, eventCount);
+  const cachedEvents = getCachedEvents(cacheKey);
+  if (cachedEvents) {
+    return cachedEvents.slice(0, eventCount);
+  }
+
+  // Check rate limit
+  const waitTime = checkRateLimit();
+  if (waitTime > 0) {
+    await sleep(waitTime);
+  }
 
   try {
     const prompt = EVENT_GENERATION_PROMPT(eventCount, userInput);
-    const apiKey = getApiKeyWithRetry(retryCount > 0 ? null : currentKeyIndex);
 
     console.log(`Generating prompt (${prompt.length} chars)...`);
     console.log(`   • Preview: "${prompt.substring(0, 100)}..."`);
 
-    // Add timeout for faster AI model
+    // Optimized timeout based on model
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+    const timeoutMs = Math.min(10000 + eventCount * 500, 20000); // 10-20s max
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     console.log(`[API] Sending request to OpenRouter...`);
     const requestStartTime = Date.now();
@@ -145,14 +186,16 @@ async function generateDynamicEventTitles(
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey.substring(0, 10)}...`,
+          Authorization: `Bearer ${API_KEY}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://fake-calendar-filler.com",
-          "X-Title": "Fake Calendar Filler",
+          "HTTP-Referer": "https://calgen.com",
+          "X-Title": "CalGen",
         },
         body: JSON.stringify({
           model: process.env.OPENROUTER_MODEL,
           messages: [{ role: "user", content: prompt }],
+          temperature: 0.7, // Add some creativity
+          max_tokens: Math.min(eventCount * 150, 4000), // Dynamic token limit
         }),
         signal: controller.signal,
       },
@@ -166,11 +209,20 @@ async function generateDynamicEventTitles(
     );
 
     if (!response.ok) {
-      console.error(
-        "OpenRouter API error:",
-        response.status,
-        response.statusText,
-      );
+      const errorData = await response.json().catch(() => ({}));
+      console.error("OpenRouter API error:", response.status, errorData);
+
+      if (response.status === 429) {
+        const retryAfter = errorData?.error?.retry_after || 5000;
+        console.log(`Rate limited. Retrying after ${retryAfter}ms...`);
+        await sleep(retryAfter);
+        return await generateDynamicEventTitles(
+          userInput,
+          eventCount,
+          retryCount + 1,
+        );
+      }
+
       throw new Error(`OpenRouter API error: ${response.status}`);
     }
 
@@ -184,7 +236,7 @@ async function generateDynamicEventTitles(
 
     if (!content) {
       console.error(
-        `❌ No content in response! Full data:`,
+        `No content in response! Full data:`,
         JSON.stringify(data, null, 2),
       );
       throw new Error("No content received from OpenRouter API");
@@ -196,13 +248,12 @@ async function generateDynamicEventTitles(
     // Try to parse the JSON response
     let parsedContent;
     try {
-      // Remove any markdown formatting that might be present
       const cleanContent = content.replace(/```json\n?|\n?```/g, "").trim();
       console.log(`Cleaned content: "${cleanContent.substring(0, 100)}..."`);
       parsedContent = JSON.parse(cleanContent);
       console.log(`JSON parsed successfully`);
     } catch (parseError) {
-      console.error("❌ Failed to parse OpenRouter response:", parseError);
+      console.error("Failed to parse OpenRouter response:", parseError);
       console.error("Raw content:", content);
       throw new Error("Failed to parse AI response as JSON");
     }
@@ -214,35 +265,40 @@ async function generateDynamicEventTitles(
 
     if (events.length > 0) {
       console.log(`Generated events preview:`);
-      events.forEach((event, index) => {
+      events.slice(0, 3).forEach((event, index) => {
         console.log(
           `   ${index + 1}. "${event.title}" (${event.duration}min) - ${event.description ? "Has description" : "No description"}`,
         );
       });
+      if (events.length > 3) {
+        console.log(`   ... and ${events.length - 3} more events`);
+      }
     }
 
     if (events.length === 0) {
       throw new Error("No events generated in response");
     }
 
-    if (events.length < eventCount) {
-      console.warn(
-        `Warning: AI returned only ${events.length} events instead of requested ${eventCount}`,
-      );
-    }
+    // Cache successful results
+    cacheEvents(cacheKey, events);
 
     return events;
   } catch (error) {
     console.error("Error generating dynamic event titles:", error.message);
 
-    // Retry with different API key if we have more keys and this is a rate limit error
-    if (
-      retryCount < API_KEYS.length - 1 &&
-      (error.message.includes("429") || error.message.includes("rate limit"))
-    ) {
+    // Retry with exponential backoff for rate limit or temporary errors
+    const isRetryable =
+      error.message.includes("429") ||
+      error.message.includes("rate limit") ||
+      error.message.includes("timeout") ||
+      error.name === "AbortError";
+
+    if (isRetryable && retryCount < 3) {
+      const backoffMs = Math.min(1000 * Math.pow(2, retryCount), 8000); // 1s, 2s, 4s
       console.log(
-        `Retrying with different API key (attempt ${retryCount + 1}/${API_KEYS.length})`,
+        `Retrying after ${backoffMs}ms (attempt ${retryCount + 1}/3)...`,
       );
+      await sleep(backoffMs);
       return await generateDynamicEventTitles(
         userInput,
         eventCount,
@@ -311,11 +367,11 @@ const generateUniqueId = () => {
 // Helper function to ensure valid tokens and refresh if needed
 const ensureValidTokens = async () => {
   try {
-    if (!fs.existsSync("token.json")) {
+    if (!fs.existsSync(TOKEN_PATH)) {
       throw new Error("No token file exists");
     }
 
-    const tokenData = JSON.parse(fs.readFileSync("token.json"));
+    const tokenData = JSON.parse(fs.readFileSync(TOKEN_PATH));
 
     // Set the credentials
     oAuth2Client.setCredentials(tokenData);
@@ -336,7 +392,7 @@ const ensureValidTokens = async () => {
         };
 
         fs.writeFileSync(
-          "token.json",
+          TOKEN_PATH,
           JSON.stringify(updatedTokenData, null, 2),
         );
         console.log("Token refreshed successfully");
@@ -356,7 +412,7 @@ const ensureValidTokens = async () => {
 
 const checkAuthStatus = async () => {
   try {
-    if (!fs.existsSync("token.json")) {
+    if (!fs.existsSync(TOKEN_PATH)) {
       return { authenticated: false, reason: "No token file" };
     }
 
@@ -404,11 +460,11 @@ const checkAuthStatus = async () => {
 // Simple version for non-async calls (fallback)
 const checkAuthStatusSync = () => {
   try {
-    if (!fs.existsSync("token.json")) {
+    if (!fs.existsSync(TOKEN_PATH)) {
       return { authenticated: false, reason: "No token file" };
     }
 
-    const tokens = JSON.parse(fs.readFileSync("token.json"));
+    const tokens = JSON.parse(fs.readFileSync(TOKEN_PATH));
     if (!tokens.access_token && !tokens.refresh_token) {
       return { authenticated: false, reason: "Invalid token format" };
     }
@@ -459,7 +515,7 @@ app.get("/oauth2callback", async (req, res) => {
         tokens.expiry_date || new Date(Date.now() + 3600000).toISOString(), // 1 hour from now if not provided
     };
 
-    fs.writeFileSync("token.json", JSON.stringify(tokenData, null, 2));
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenData, null, 2));
 
     // In development, redirect to Vite dev server
     // In production, redirect to same origin (React app)
@@ -473,7 +529,7 @@ app.get("/oauth2callback", async (req, res) => {
       <html>
         <body style="font-family: system-ui, -apple-system, sans-serif; max-width: 500px; margin: 50px auto; padding: 20px;">
           <div style="background: #fee; border: 1px solid #fcc; padding: 20px; border-radius: 8px;">
-            <h2 style="color: #c33; margin-top: 0;">❌ Authorization Failed</h2>
+            <h2 style="color: #c33; margin-top: 0;">Authorization Failed</h2>
             <p style="color: #666;">${error.message}</p>
             <a href="/" style="color: #0066cc; text-decoration: none; font-weight: 500;">← Try Again</a>
           </div>
@@ -497,12 +553,12 @@ app.get("/api/auth/status", async (req, res) => {
   }
 });
 
-// 3️⃣🚫 NEW: Logout endpoint
+// NEW: Logout endpoint
 app.post("/api/auth/logout", (req, res) => {
   try {
     // Remove token file
-    if (fs.existsSync("token.json")) {
-      fs.unlinkSync("token.json");
+    if (fs.existsSync(TOKEN_PATH)) {
+      fs.unlinkSync(TOKEN_PATH);
     }
 
     res.json({
@@ -521,7 +577,7 @@ app.post("/api/auth/logout", (req, res) => {
 // 4️⃣ ENHANCED: Generate fake events with categories
 app.post("/api/events", async (req, res) => {
   try {
-    if (!fs.existsSync("token.json")) {
+    if (!fs.existsSync(TOKEN_PATH)) {
       return res.status(401).json({
         error: "Not authorized. Visit /auth first.",
       });
@@ -543,9 +599,25 @@ app.post("/api/events", async (req, res) => {
       });
     }
 
-    if (count < 1 || count > 10) {
+    // Validate date range
+    const parsedStartDate = new Date(startDate);
+    const parsedEndDate = new Date(endDate);
+    
+    if (isNaN(parsedStartDate.getTime()) || isNaN(parsedEndDate.getTime())) {
       return res.status(400).json({
-        error: "Count must be between 1 and 10",
+        error: "Invalid date format. Use YYYY-MM-DD format.",
+      });
+    }
+    
+    if (parsedEndDate < parsedStartDate) {
+      return res.status(400).json({
+        error: "End date must be after or equal to start date",
+      });
+    }
+
+    if (count < 1 || count > 30) {
+      return res.status(400).json({
+        error: "Count must be between 1 and 30",
       });
     }
 
@@ -554,43 +626,17 @@ app.post("/api/events", async (req, res) => {
 
     const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
 
-    // Generate event titles with optimized parallel chunking for speed
-    console.log(`Generating ${count} event titles with fast AI...`);
+    // Generate event titles with optimized single request
+    console.log(`Generating ${count} event titles with optimized AI...`);
     const aiStartTime = Date.now();
 
+    // Use single optimized request with intelligent batching
     let eventTitles;
-    if (count <= 6) {
-      // Single request for small counts
+    try {
       eventTitles = await generateDynamicEventTitles(userInput, count);
-    } else {
-      // Parallel requests for large counts (split into chunks of 4 for max speed)
-      const chunkSize = 2;
-      const chunks = [];
-      for (let i = 0; i < count; i += chunkSize) {
-        const chunkCount = Math.min(chunkSize, count - i);
-        chunks.push(generateDynamicEventTitles(userInput, chunkCount));
-      }
-
-      console.log(
-        `Making ${chunks.length} parallel AI requests (${chunkSize} events each)...`,
-      );
-      const chunkResults = await Promise.allSettled(chunks);
-
-      eventTitles = [];
-      chunkResults.forEach((result, index) => {
-        if (result.status === "fulfilled") {
-          eventTitles = eventTitles.concat(result.value);
-        } else {
-          console.warn(`AI chunk ${index + 1} failed:`, result.reason);
-          // Add fallback events for failed chunk
-          const fallbackCount = Math.min(chunkSize, count - eventTitles.length);
-          const fallbackEvents = generateFallbackEvents(
-            userInput,
-            fallbackCount,
-          );
-          eventTitles = eventTitles.concat(fallbackEvents);
-        }
-      });
+    } catch (error) {
+      console.warn(`Primary AI request failed, using fallback:`, error.message);
+      eventTitles = generateFallbackEvents(userInput, count);
     }
 
     const aiTime = Date.now() - aiStartTime;
@@ -623,16 +669,14 @@ app.post("/api/events", async (req, res) => {
     console.log(`Date range: ${startDate} to ${endDate}`);
     const startTime = Date.now();
 
-    // Calculate total days in range (inclusive)
-    const startDateObj = new Date(startDate);
-    const endDateObj = new Date(endDate);
+    // Calculate total days in range (inclusive) - reuse parsedStartDate/parsedEndDate
     // Add 1 to make it inclusive and ensure minimum 1 day
     const totalDays = Math.max(
       1,
-      Math.ceil((endDateObj - startDateObj) / (1000 * 60 * 60 * 24)) + 1,
+      Math.ceil((parsedEndDate - parsedStartDate) / (1000 * 60 * 60 * 24)) + 1,
     );
     console.log(
-      `Total days in range: ${totalDays} (${startDateObj.toDateString()} to ${endDateObj.toDateString()})`,
+      `Total days in range: ${totalDays} (${parsedStartDate.toDateString()} to ${parsedEndDate.toDateString()})`,
     );
 
     for (let i = 0; i < count; i++) {
@@ -667,12 +711,15 @@ app.post("/api/events", async (req, res) => {
       const daysOffset = Math.floor(
         (i / Math.max(1, count - 1)) * Math.max(1, totalDays - 1),
       );
-      // Add small randomness to avoid mechanical placement
-      const randomVariation = Math.random() < 0.3 ? 1 : 0; // 30% chance to shift by 1 day
-      const totalDayOffset = daysOffset + randomVariation;
 
-      // Create a new date with the offset using milliseconds for robustness
-      const offsetDate = new Date(start.getTime() + (totalDayOffset * 24 * 60 * 60 * 1000));
+      // Create offset date using setDate for reliable date arithmetic
+      const offsetDate = new Date(start);
+      offsetDate.setDate(start.getDate() + daysOffset);
+
+      // Add small randomness to avoid mechanical placement
+      if (Math.random() < 0.3) {
+        offsetDate.setDate(offsetDate.getDate() + 1); // 30% chance to shift by 1 day
+      }
 
       // Validate the offset date
       if (isNaN(offsetDate.getTime())) {
@@ -686,21 +733,28 @@ app.post("/api/events", async (req, res) => {
         continue;
       }
 
-      // Additional validation: check if date is reasonable (within 1 year)
+      // Additional validation: check if date is reasonable (within 1 year from today)
       const now = new Date();
-      const oneYearFromNow = new Date(now.getTime() + (365 * 24 * 60 * 60 * 1000));
+      const oneYearFromNow = new Date(
+        now.getTime() + 365 * 24 * 60 * 60 * 1000,
+      );
       if (offsetDate < now || offsetDate > oneYearFromNow) {
         skippedEvents++;
-        console.error(`[ERROR] Date out of reasonable range for event ${i + 1}:`, {
-          originalDate: start.toString(),
-          totalDayOffset,
-          offsetDate: offsetDate.toString(),
-        });
+        console.error(
+          `[ERROR] Date out of reasonable range for event ${i + 1}:`,
+          {
+            originalDate: start.toString(),
+            totalDayOffset,
+            offsetDate: offsetDate.toString(),
+            now: now.toString(),
+            oneYearFromNow: oneYearFromNow.toString(),
+          },
+        );
         console.log(`[DEBUG] Skipped events so far: ${skippedEvents}/${i + 1}`);
         continue;
       }
 
-      // Set start time with variety within user's preferred timezone (start time to 1 AM)
+      // Set start time with variety within user's preferred timezone
       const hourVariation = Math.floor(Math.random() * 4) - 1; // -1 to +2 hours variety
       // Calculate max start time to ensure event ends before 1 AM next day
       const maxStartHour = Math.max(
@@ -713,26 +767,30 @@ app.post("/api/events", async (req, res) => {
       );
       const minuteVariation = Math.floor(Math.random() * 60); // 0-59 minutes
 
-      // Create the start time in user's local timezone
-      offsetDate.setHours(finalHour, minuteVariation, 0, 0);
+      // Create the start time using a fresh Date object to avoid mutation issues
+      const eventStartDate = new Date(offsetDate);
+      eventStartDate.setHours(finalHour, minuteVariation, 0, 0);
 
-      // Validate the start date before proceeding
-      if (isNaN(offsetDate.getTime())) {
+      // Validate the final start date before proceeding
+      if (isNaN(eventStartDate.getTime())) {
         skippedEvents++;
-        console.error(
-          `[ERROR] Invalid start date for event ${i + 1}:`,
-          offsetDate.toString(),
-        );
+        console.error(`[ERROR] Invalid final start date for event ${i + 1}:`, {
+          offsetDate: offsetDate.toString(),
+          eventStartDate: eventStartDate.toString(),
+          finalHour,
+          minuteVariation,
+        });
         console.log(`[DEBUG] Skipped events so far: ${skippedEvents}/${i + 1}`);
         continue;
       }
 
+      // Use the validated start date
       console.log(
-        `Event ${i + 1}: ${eventData.title} - Local time: ${offsetDate.toLocaleString("en-US", { timeZone: timezone, hour: "2-digit", minute: "2-digit" })}`,
+        `Event ${i + 1}: ${eventData.title} - Local time: ${eventStartDate.toLocaleString("en-US", { timeZone: timezone, hour: "2-digit", minute: "2-digit" })}`,
       );
 
       // Simplified time slot finding - just check for major overlaps
-      let finalStart = new Date(offsetDate);
+      let finalStart = new Date(eventStartDate);
       let finalEnd = new Date(finalStart); // Use finalStart, not start
       finalEnd.setMinutes(finalEnd.getMinutes() + eventData.duration);
 
@@ -857,69 +915,115 @@ app.post("/api/events", async (req, res) => {
       `[DEBUG] Events processed: ${createdEvents.length}, Events skipped: ${skippedEvents}, Total requested: ${count}`,
     );
 
-    // Execute all event creations in parallel
-    const eventPromises = createdEvents.map(
-      ({ event, originalStart, duration }) => {
-        // Return a promise that resolves to the calendar insertion
+    // Execute event creations sequentially to avoid Google Calendar API rate limits
+    console.log(
+      `Creating ${count} events sequentially to avoid rate limits...`,
+    );
+    const apiStartTime = Date.now();
+
+    const events = [];
+    let successfulCount = 0;
+    let failedCount = 0;
+    const BATCH_SIZE = 3; // Create 3 events at a time with delays
+    const DELAY_BETWEEN_BATCHES = 2000; // 2 seconds between batches
+
+    for (let i = 0; i < createdEvents.length; i += BATCH_SIZE) {
+      const batch = createdEvents.slice(i, i + BATCH_SIZE);
+
+      // Create batch in parallel (but with batch limits)
+      const batchPromises = batch.map(({ event, originalStart, duration }) => {
         return calendar.events.insert({
           calendarId: "primary",
           resource: event,
         });
-      },
-    );
+      });
 
-    // Execute all event creations in parallel
-    console.log(`Creating ${count} events in parallel...`);
-    const apiStartTime = Date.now();
-    const eventCreationResults = await Promise.allSettled(eventPromises);
-    const apiTime = Date.now() - apiStartTime;
-    console.log(`Google Calendar API calls completed in ${apiTime}ms`);
+      try {
+        const batchResults = await Promise.allSettled(batchPromises);
 
-    // Process results and format response
-    const events = [];
-    let successfulCount = 0;
-    let failedCount = 0;
-
-    eventCreationResults.forEach((result, index) => {
-      if (result.status === "fulfilled") {
-        const createdEvent = result.value;
-        events.push({
-          id: createdEvent.data.id,
-          title: createdEvent.data.summary,
-          start: createdEvent.data.start.dateTime,
-          end: createdEvent.data.end.dateTime,
-          userInput: userInput,
-          duration: createdEvents[index].duration,
+        // Process batch results
+        batchResults.forEach((result, batchIndex) => {
+          const eventIndex = i + batchIndex;
+          if (result.status === "fulfilled") {
+            const createdEvent = result.value;
+            events.push({
+              id: createdEvent.data.id,
+              title: createdEvent.data.summary,
+              start: createdEvent.data.start.dateTime,
+              end: createdEvent.data.end.dateTime,
+              userInput: userInput,
+              duration: createdEvents[eventIndex].duration,
+            });
+            successfulCount++;
+            console.log(
+              `Created: ${createdEvent.data.summary} on ${new Date(createdEvent.data.start.dateTime).toDateString()}`,
+            );
+          } else {
+            failedCount++;
+            console.error(
+              `Failed to create event ${eventIndex + 1}:`,
+              result.reason?.message || result.reason,
+            );
+            // Add failed event to maintain count consistency
+            events.push({
+              id: `failed-${eventIndex}`,
+              title:
+                createdEvents[eventIndex]?.event?.summary ||
+                `Failed Event ${eventIndex + 1}`,
+              start: new Date().toISOString(),
+              end: new Date().toISOString(),
+              userInput: userInput,
+              duration: createdEvents[eventIndex]?.duration || 60,
+              error: true,
+            });
+          }
         });
-        successfulCount++;
+
         console.log(
-          `✅ Created: ${createdEvent.data.summary} on ${new Date(createdEvent.data.start.dateTime).toDateString()}`,
+          `Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(createdEvents.length / BATCH_SIZE)} completed. Success: ${successfulCount}, Failed: ${failedCount}`,
         );
-      } else {
-        failedCount++;
-        console.error(`❌ Failed to create event ${index + 1}:`, result.reason);
-        // Add a failed event to track the count
-        events.push({
-          id: `failed-${index}`,
-          title:
-            createdEvents[index]?.event?.summary || `Failed Event ${index + 1}`,
-          start: new Date().toISOString(),
-          end: new Date().toISOString(),
-          userInput: userInput,
-          duration: createdEvents[index]?.duration || 60,
-          error: true,
+
+        // Add delay between batches (except for the last batch)
+        if (i + BATCH_SIZE < createdEvents.length) {
+          console.log(
+            `Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`,
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, DELAY_BETWEEN_BATCHES),
+          );
+        }
+      } catch (error) {
+        console.error(
+          `Batch ${Math.floor(i / BATCH_SIZE) + 1} failed completely:`,
+          error.message,
+        );
+        // Mark all events in this batch as failed
+        batch.forEach((_, batchIndex) => {
+          const eventIndex = i + batchIndex;
+          failedCount++;
+          events.push({
+            id: `failed-${eventIndex}`,
+            title:
+              createdEvents[eventIndex]?.event?.summary ||
+              `Failed Event ${eventIndex + 1}`,
+            start: new Date().toISOString(),
+            end: new Date().toISOString(),
+            userInput: userInput,
+            duration: createdEvents[eventIndex]?.duration || 60,
+            error: true,
+          });
         });
       }
-    });
+    }
 
     const totalTime = Date.now() - startTime;
-    console.log(`📊 SUMMARY:`);
+    console.log(`SUMMARY:`);
     console.log(`   • Total time: ${totalTime}ms (${totalTime / 1000}s)`);
-    console.log(`   • API time: ${apiTime}ms (${apiTime / 1000}s)`);
-    console.log(`   • Scheduling time: ${totalTime - apiTime}ms`);
+    console.log(`   • AI time: ${aiTime}ms (${aiTime / 1000}s)`);
+    console.log(`   • Scheduling time: ${totalTime - aiTime}ms`);
     console.log(`   • Successful: ${successfulCount}/${count} events`);
     console.log(`   • Failed: ${failedCount}/${count} events`);
-    console.log(`   • Average per event: ${Math.round(apiTime / count)}ms`);
+    console.log(`   • Average per event: ${Math.round(totalTime / count)}ms`);
 
     res.json({
       message: "Events created successfully",
@@ -942,7 +1046,7 @@ app.post("/api/events", async (req, res) => {
 // 5️⃣ NEW: Get events created by this app
 app.get("/api/events/created", async (req, res) => {
   try {
-    if (!fs.existsSync("token.json")) {
+    if (!fs.existsSync(TOKEN_PATH)) {
       return res.status(401).json({
         error: "Not authorized. Visit /auth first.",
       });
@@ -1000,7 +1104,7 @@ app.get("/api/events/created", async (req, res) => {
 // 6️⃣ NEW: Delete all events created by this app
 app.delete("/api/events", async (req, res) => {
   try {
-    if (!fs.existsSync("token.json")) {
+    if (!fs.existsSync(TOKEN_PATH)) {
       return res.status(401).json({
         error: "Not authorized. Visit /auth first.",
       });
@@ -1115,7 +1219,7 @@ app.get("/", (req, res) => {
 
 app.listen(3000, () => {
   console.log(
-    "🚀 Enhanced Funny Calendar Filler running on http://localhost:3000",
+    "Enhanced Funny Calendar Filler running on http://localhost:3000",
   );
   console.log("Features:");
   console.log("  • AI-powered event title generation");
